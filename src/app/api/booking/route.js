@@ -2,31 +2,55 @@
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialize Resend only when the API key exists
+const resend = process.env.RESEND_API_KEY
+    ? new Resend(process.env.RESEND_API_KEY)
+    : null;
 
 export async function POST(request) {
     try {
-        const { fullName, email, dateTime, agenda } = await request.json();
+        const from = process.env.FROM_EMAIL;
+        const adminEmail = process.env.ADMIN_EMAIL;
+
+        if (!resend || !from || !adminEmail) {
+            console.error("Email environment variables are missing.");
+
+            return NextResponse.json(
+                {
+                    success: false,
+                    message: "Email service is not configured.",
+                },
+                { status: 500 }
+            );
+        }
+
+        const { fullName, email, dateTime, agenda } =
+            await request.json();
 
         // Validate required fields
-        if (!fullName?.trim() || !email?.trim() || !dateTime || !agenda?.trim()) {
+        if (
+            !fullName?.trim() ||
+            !email?.trim() ||
+            !dateTime ||
+            !agenda?.trim()
+        ) {
             return NextResponse.json(
                 { message: "Please complete all required fields." },
                 { status: 400 }
             );
         }
 
-        // Validate email format
+        // Validate email
         const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-        if (!emailPattern.test(email)) {
+        if (!emailPattern.test(email.trim())) {
             return NextResponse.json(
                 { message: "Please enter a valid email address." },
                 { status: 400 }
             );
         }
 
-        // Prevent past bookings
+        // Validate future date
         const requestedDate = new Date(dateTime);
 
         if (
@@ -45,20 +69,11 @@ export async function POST(request) {
             timeZone: "Asia/Kolkata",
         });
 
-        const from = process.env.FROM_EMAIL;
-        const adminEmail = process.env.ADMIN_EMAIL;
-
-        if (!from || !adminEmail || !process.env.RESEND_API_KEY) {
-            return NextResponse.json(
-                { message: "Email service is not configured." },
-                { status: 500 }
-            );
-        }
-
-        // Email to admin
+        // Send email to admin
         const adminResult = await resend.emails.send({
             from,
             to: adminEmail,
+            replyTo: email.trim(),
             subject: `New Meeting Request from ${fullName}`,
             text: `
 New meeting request
@@ -76,10 +91,10 @@ ${agenda}
             throw new Error(adminResult.error.message);
         }
 
-        // Email to visitor
+        // Send confirmation email to visitor
         const visitorResult = await resend.emails.send({
             from,
-            to: email,
+            to: email.trim(),
             subject: "Thank you for your meeting request",
             text: `
 Hello ${fullName},
@@ -90,7 +105,7 @@ Your requested date and time:
 ${formattedDate}
 
 We have received your agenda and will contact you soon.
-The meeting invitation or meeting link will be shared with you shortly.
+The meeting invitation or meeting link will be shared shortly.
 
 Best regards,
 Fathima Rehman
@@ -105,11 +120,15 @@ Fathima Rehman
             success: true,
             message: "Your meeting request has been submitted successfully!",
         });
+
     } catch (error) {
         console.error("Booking error:", error);
 
         return NextResponse.json(
-            { message: "Unable to submit your request. Please try again." },
+            {
+                success: false,
+                message: "Unable to submit your request. Please try again.",
+            },
             { status: 500 }
         );
     }
